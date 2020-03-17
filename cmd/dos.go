@@ -15,7 +15,7 @@ var dosCmd = &cobra.Command{
 	Long:  `Perform DoS attack`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Hello badAss, please provide more args")
-		err := dos.Run()
+		err := dos.Run("wlp58s0", "192.168.1.69", "192.168.1.1")
 		if err != nil {
 			log.Fatal(err)
 		}

