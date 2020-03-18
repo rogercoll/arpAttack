@@ -69,40 +69,6 @@ func ips(n *net.IPNet) (out []net.IP) {
 	return
 }
 
-func writeARP(handler *pcap.Handle, iface *net.Interface, addr *net.IPNet) error {
-	//we want to request the mac address => broadcast address
-	eth := layers.Ethernet{
-		SrcMAC:       iface.HardwareAddr,
-		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
-		EthernetType: layers.EthernetTypeARP,
-	}
-	arp := layers.ARP{
-		AddrType:          layers.LinkTypeEthernet,
-		Protocol:          layers.EthernetTypeIPv4,
-		HwAddressSize:     6,
-		ProtAddressSize:   4,
-		Operation:         layers.ARPRequest,
-		SourceHwAddress:   []byte(iface.HardwareAddr),
-		SourceProtAddress: []byte(addr.IP),
-		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
-	}
-	// Set up buffer and options for serialization.
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{
-		FixLengths:       true,
-		ComputeChecksums: true,
-	}
-	// Send one packet for every address.
-	for _, ip := range ips(addr) {
-		arp.DstProtAddress = []byte(ip)
-		gopacket.SerializeLayers(buf, opts, &eth, &arp)
-		if err := handler.WritePacketData(buf.Bytes()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func getValidAddress(iface *net.Interface) (*net.IPNet, error) {
 	var faddr *net.IPNet //final address
 	if addrs, err := iface.Addrs(); err != nil {
@@ -218,12 +184,17 @@ func getInterface(ifaceName string) (*net.Interface, error) {
 	return nil, fmt.Errorf("Interface %s not found", ifaceName)
 }
 
-func getDstMACAddr(iface *net.Interface, handle *pcap.Handle, dstAddr string) ([]byte, error) {
+func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dstAddr string) ([]byte, error) {
+	//write missing
 	stop := make(chan struct{})
 	addresses := make(chan []byte)
-	go utils.ReadARP(handle, iface, addresses, stop)
+	go utils.ReadARP(handler, iface, addresses, stop)
 	defer close(stop)
 	defer close(addresses)
+	if err := utils.WriteARP(handler, iface, addr, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, utils.FormatAddr(dstAddr)); err != nil {
+		log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
+		log.Fatal(err)
+	}
 	select {
 	case dstMACAddr := <-addresses:
 		return dstMACAddr, nil
@@ -258,7 +229,7 @@ func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	}
 	defer handle.Close()
 
-	dstMACAddr, err := getDstMACAddr(iface, handle, dstAddr)
+	dstMACAddr, err := getDstMACAddr(iface, handle, addr, dstAddr)
 	if err != nil {
 		return err
 	}
