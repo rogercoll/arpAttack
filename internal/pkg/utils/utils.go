@@ -12,11 +12,12 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/rogercoll/arpAttack/pkg/data"
 )
 
 // readARP loops until 'stop' is closed. Handles incoming ARP responses
 //Per el channel stop només es pot llegir
-func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- []byte, stop <-chan struct{}) {
+func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- data.IPgetMAC, stop <-chan struct{}) {
 	defer close(addresses)
 	src := gopacket.NewPacketSource(handler, layers.LayerTypeEthernet)
 	in := src.Packets()
@@ -35,7 +36,7 @@ func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- []byte
 				// This is a packet I sent.
 				continue
 			}
-			addresses <- arp.SourceHwAddress
+			addresses <- data.IPgetMAC{Addr: arp.SourceProtAddress, MAC: arp.SourceHwAddress}
 		}
 	}
 }

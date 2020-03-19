@@ -13,6 +13,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/rogercoll/arpAttack/internal/pkg/utils"
+	"github.com/rogercoll/arpAttack/pkg/data"
 )
 
 func ARPGratuitous(handler *pcap.Handle, iface *net.Interface, DstHwAddress, Daddr, Saddr []byte) error {
@@ -187,7 +188,7 @@ func getInterface(ifaceName string) (*net.Interface, error) {
 
 func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dstAddr string) ([]byte, error) {
 	//write missing
-	addresses := make(chan []byte)
+	addresses := make(chan data.IPgetMAC)
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, time.Second*30)
 	go utils.ReadARP(handler, iface, addresses, ctx.Done())
@@ -195,14 +196,18 @@ func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, 
 		log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
 		log.Fatal(err)
 	}
-	select {
-	case dstMACAddr := <-addresses:
-		cancel()
-		return dstMACAddr, nil
-	case <-ctx.Done():
-		fmt.Println("Time out: No MAC address found for the victim address")
-		return []byte{}, nil
+	for err := ctx.Err(); err == nil; {
+		select {
+		case dstMACAddr := <-addresses:
+			if net.IP(dstMACAddr.Addr).String() == dstAddr {
+				cancel()
+				return dstMACAddr.MAC, nil
+			}
+		case <-ctx.Done():
+			fmt.Println("Time out: No MAC address found for the victim address")
+		}
 	}
+	return []byte{}, fmt.Errorf("Could not found the MAC address for %s", dstAddr)
 }
 
 func Run(ifaceName string, dstAddr, fakeAddr string) error {
