@@ -2,8 +2,12 @@ package utils
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
+	"strconv"
+	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -11,7 +15,9 @@ import (
 )
 
 // readARP loops until 'stop' is closed. Handles incoming ARP responses
-func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan []byte, stop chan struct{}) {
+//Per el channel stop només es pot llegir
+func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- []byte, stop <-chan struct{}) {
+	defer close(addresses)
 	src := gopacket.NewPacketSource(handler, layers.LayerTypeEthernet)
 	in := src.Packets()
 	for {
@@ -69,8 +75,20 @@ func WriteARP(handler *pcap.Handle, iface *net.Interface, addr *net.IPNet, dstMA
 }
 
 func FormatAddr(addr string) []byte {
-	ip := net.ParseIP(addr)
-	ip = ip.To4()
-	fmt.Printf("%+v\n", ip)
-	return ip
+	octets := strings.Split(addr, ".")
+	addrbytes := make([]uint8, 4)
+	for i, octet := range octets {
+		aux, err := strconv.Atoi(octet)
+		if err != nil {
+			log.Fatal(err)
+			return []byte{}
+		}
+		b := make([]byte, 8)
+		binary.LittleEndian.PutUint64(b, uint64(aux))
+		addrbytes[i] = b[0]
+	}
+	sAddr := net.IPv4(addrbytes[0], addrbytes[1], addrbytes[2], addrbytes[3])
+	sAddr = sAddr.To4()
+	fmt.Printf("%+v\n", sAddr)
+	return sAddr
 }

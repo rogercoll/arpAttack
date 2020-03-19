@@ -1,6 +1,7 @@
 package dos
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -186,19 +187,19 @@ func getInterface(ifaceName string) (*net.Interface, error) {
 
 func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dstAddr string) ([]byte, error) {
 	//write missing
-	stop := make(chan struct{})
 	addresses := make(chan []byte)
-	go utils.ReadARP(handler, iface, addresses, stop)
-	defer close(stop)
-	defer close(addresses)
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+	go utils.ReadARP(handler, iface, addresses, ctx.Done())
 	if err := utils.WriteARP(handler, iface, addr, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, utils.FormatAddr(dstAddr)); err != nil {
 		log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
 		log.Fatal(err)
 	}
 	select {
 	case dstMACAddr := <-addresses:
+		cancel()
 		return dstMACAddr, nil
-	case <-time.After(time.Second * 30):
+	case <-ctx.Done():
 		fmt.Println("Time out: No MAC address found for the victim address")
 		return []byte{}, nil
 	}
@@ -233,7 +234,8 @@ func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(dstMACAddr)
+	fmt.Println("Dest MAC:")
+	fmt.Println(net.HardwareAddr(dstMACAddr))
 
 	return nil
 }
