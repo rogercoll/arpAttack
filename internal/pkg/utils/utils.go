@@ -2,11 +2,15 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -36,6 +40,26 @@ func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- data.I
 				continue
 			}
 			addresses <- data.IPgetMAC{Addr: arp.SourceProtAddress, MAC: arp.SourceHwAddress}
+		}
+	}
+}
+
+func ReadIPv4(handler *pcap.Handle, iface *net.Interface, ipv4Packet chan<- layers.IPv4, stop <-chan struct{}) {
+	defer close(ipv4Packet)
+	src := gopacket.NewPacketSource(handler, layers.LayerTypeEthernet)
+	in := src.Packets()
+	for {
+		var packet gopacket.Packet
+		select {
+		case <-stop:
+			return
+		case packet = <-in:
+			ipv4Layer := packet.Layer(layers.LayerTypeIPv4)
+			if ipv4Layer == nil {
+				continue
+			}
+			ipv4 := ipv4Layer.(*layers.IPv4)
+			ipv4Packet <- *ipv4
 		}
 	}
 }
@@ -91,4 +115,92 @@ func FormatAddr(addr string) []byte {
 	sAddr := net.IPv4(addrbytes[0], addrbytes[1], addrbytes[2], addrbytes[3])
 	sAddr = sAddr.To4()
 	return sAddr
+}
+
+func GetInterface(ifaceName string) (*net.Interface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	for _, iface := range ifaces {
+		if iface.Name == ifaceName {
+			return &iface, nil
+		}
+	}
+	return nil, fmt.Errorf("Interface %s not found", ifaceName)
+}
+
+func GetDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dstAddr string) ([]byte, error) {
+	//write missing
+	addresses := make(chan data.IPgetMAC)
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+	go ReadARP(handler, iface, addresses, ctx.Done())
+	if err := WriteARP(1, handler, iface, addr, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, FormatAddr(dstAddr)); err != nil {
+		log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
+		log.Fatal(err)
+	}
+	for err := ctx.Err(); err == nil; {
+		select {
+		case dstMACAddr := <-addresses:
+			if net.IP(dstMACAddr.Addr).String() == dstAddr {
+				cancel()
+				return dstMACAddr.MAC, nil
+			}
+		case <-ctx.Done():
+			fmt.Println("Time out: No MAC address found for the victim address")
+			return []byte{}, errors.New("Time out")
+		}
+	}
+	return []byte{}, fmt.Errorf("Could not found the MAC address for %s", dstAddr)
+}
+
+func GetValidAddress(iface *net.Interface) (*net.IPNet, error) {
+	var faddr *net.IPNet //final address
+	if addrs, err := iface.Addrs(); err != nil {
+		return nil, err
+	} else {
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				//we need ipv4 not mac addresses
+				if ip4 := ipnet.IP.To4(); ip4 != nil {
+					//verify that Mask is 4 bytes
+					faddr = &net.IPNet{
+						IP:   ip4,
+						Mask: ipnet.Mask[len(ipnet.Mask)-4:],
+					}
+					break
+				}
+
+			}
+		}
+	}
+	if faddr == nil {
+		return nil, errors.New("No good IP found for that interface")
+	} else if faddr.IP[0] == 127 {
+		return nil, errors.New("Skipping localhost")
+	} else if faddr.IP[0] == 172 {
+		return nil, errors.New("Skipping docker interfaces")
+	} else if faddr.Mask[0] != 0xff || faddr.Mask[1] != 0xff {
+		return nil, errors.New("Network(mask) to large for that interface")
+	}
+	return faddr, nil
+}
+
+func WriteIPv4(ip4 layers.IPv4, handler *pcap.Handle, iface *net.Interface, dstMAC []byte) error {
+	eth := layers.Ethernet{
+		SrcMAC:       iface.HardwareAddr,
+		DstMAC:       dstMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{
+		FixLengths:       true,
+		ComputeChecksums: true,
+	}
+	gopacket.SerializeLayers(buf, opts, &eth, &ip4)
+	if err := handler.WritePacketData(buf.Bytes()); err != nil {
+		return err
+	}
+	return nil
 }

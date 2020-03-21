@@ -1,7 +1,6 @@
 package dos
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/rogercoll/arpAttack/internal/pkg/utils"
-	"github.com/rogercoll/arpAttack/pkg/data"
 )
 
 func ARPGratuitous(handler *pcap.Handle, iface *net.Interface, DstHwAddress, Daddr, Saddr []byte) error {
@@ -72,38 +70,6 @@ func ips(n *net.IPNet) (out []net.IP) {
 		num++
 	}
 	return
-}
-
-func getValidAddress(iface *net.Interface) (*net.IPNet, error) {
-	var faddr *net.IPNet //final address
-	if addrs, err := iface.Addrs(); err != nil {
-		return nil, err
-	} else {
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok {
-				//we need ipv4 not mac addresses
-				if ip4 := ipnet.IP.To4(); ip4 != nil {
-					//verify that Mask is 4 bytes
-					faddr = &net.IPNet{
-						IP:   ip4,
-						Mask: ipnet.Mask[len(ipnet.Mask)-4:],
-					}
-					break
-				}
-
-			}
-		}
-	}
-	if faddr == nil {
-		return nil, errors.New("No good IP found for that interface")
-	} else if faddr.IP[0] == 127 {
-		return nil, errors.New("Skipping localhost")
-	} else if faddr.IP[0] == 172 {
-		return nil, errors.New("Skipping docker interfaces")
-	} else if faddr.Mask[0] != 0xff || faddr.Mask[1] != 0xff {
-		return nil, errors.New("Network(mask) to large for that interface")
-	}
-	return faddr, nil
 }
 
 func getInterfaces() ([]net.Interface, error) {
@@ -193,44 +159,6 @@ func performDoS(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dst
 	}
 }
 
-func getInterface(ifaceName string) (*net.Interface, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
-	for _, iface := range ifaces {
-		if iface.Name == ifaceName {
-			return &iface, nil
-		}
-	}
-	return nil, fmt.Errorf("Interface %s not found", ifaceName)
-}
-
-func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dstAddr string) ([]byte, error) {
-	//write missing
-	addresses := make(chan data.IPgetMAC)
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, time.Second*30)
-	go utils.ReadARP(handler, iface, addresses, ctx.Done())
-	if err := utils.WriteARP(1, handler, iface, addr, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, utils.FormatAddr(dstAddr)); err != nil {
-		log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
-		log.Fatal(err)
-	}
-	for err := ctx.Err(); err == nil; {
-		select {
-		case dstMACAddr := <-addresses:
-			if net.IP(dstMACAddr.Addr).String() == dstAddr {
-				cancel()
-				return dstMACAddr.MAC, nil
-			}
-		case <-ctx.Done():
-			fmt.Println("Time out: No MAC address found for the victim address")
-			return []byte{}, errors.New("Time out")
-		}
-	}
-	return []byte{}, fmt.Errorf("Could not found the MAC address for %s", dstAddr)
-}
-
 func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	//Normally to perform a DoS attack fakeAddr should be the router address
 	//Address format => 192.168.1.1
@@ -238,12 +166,12 @@ func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	iface, err := getInterface(ifaceName)
+	iface, err := utils.GetInterface(ifaceName)
 	if err != nil {
 		return err
 	}
 
-	addr, err := getValidAddress(iface)
+	addr, err := utils.GetValidAddress(iface)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -255,7 +183,7 @@ func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	}
 	defer handle.Close()
 
-	dstMACAddr, err := getDstMACAddr(iface, handle, addr, dstAddr)
+	dstMACAddr, err := utils.GetDstMACAddr(iface, handle, addr, dstAddr)
 	if err != nil {
 		return err
 	}
