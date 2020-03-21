@@ -29,6 +29,8 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.arpAttack.yaml)")
+	viper.SetDefault("author", "Roger Coll Aumatell")
+	viper.SetDefault("license", "arpAttack")
 }
 
 // initConfig reads in config file and ENV variables if set.

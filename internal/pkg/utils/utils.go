@@ -3,7 +3,6 @@ package utils
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -44,7 +43,6 @@ func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- data.I
 func WriteARP(arpType uint16, handler *pcap.Handle, iface *net.Interface, addr *net.IPNet, dstMAC, dstAddr []byte) error {
 	//we want to request the mac address => broadcast address
 	//request => Operation 1 && reply => 2
-	fmt.Println(addr)
 	eth := layers.Ethernet{
 		SrcMAC: iface.HardwareAddr,
 		//Broadcast 		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
