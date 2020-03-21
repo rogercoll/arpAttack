@@ -41,8 +41,10 @@ func ReadARP(handler *pcap.Handle, iface *net.Interface, addresses chan<- data.I
 	}
 }
 
-func WriteARP(handler *pcap.Handle, iface *net.Interface, addr *net.IPNet, dstMAC, dstAddr []byte) error {
+func WriteARP(arpType uint16, handler *pcap.Handle, iface *net.Interface, addr *net.IPNet, dstMAC, dstAddr []byte) error {
 	//we want to request the mac address => broadcast address
+	//request => Operation 1 && reply => 2
+	fmt.Println(addr)
 	eth := layers.Ethernet{
 		SrcMAC: iface.HardwareAddr,
 		//Broadcast 		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
@@ -54,7 +56,7 @@ func WriteARP(handler *pcap.Handle, iface *net.Interface, addr *net.IPNet, dstMA
 		Protocol:          layers.EthernetTypeIPv4,
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
-		Operation:         layers.ARPRequest,
+		Operation:         arpType,
 		SourceHwAddress:   []byte(iface.HardwareAddr),
 		SourceProtAddress: []byte(addr.IP),
 		DstHwAddress:      dstMAC,
@@ -90,6 +92,5 @@ func FormatAddr(addr string) []byte {
 	}
 	sAddr := net.IPv4(addrbytes[0], addrbytes[1], addrbytes[2], addrbytes[3])
 	sAddr = sAddr.To4()
-	fmt.Printf("%+v\n", sAddr)
 	return sAddr
 }

