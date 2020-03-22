@@ -148,8 +148,7 @@ func GetDstMACAddr(iface *net.Interface, handler *pcap.Handle, addr *net.IPNet, 
 				return dstMACAddr.MAC, nil
 			}
 		case <-ctx.Done():
-			fmt.Println("Time out: No MAC address found for the victim address")
-			return []byte{}, errors.New("Time out")
+			return []byte{}, errors.New("Time out: No MAC address found for the victim address")
 		}
 	}
 	return []byte{}, fmt.Errorf("Could not found the MAC address for %s", dstAddr)
